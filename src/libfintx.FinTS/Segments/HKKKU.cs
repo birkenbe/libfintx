@@ -70,9 +70,9 @@ namespace libfintx.FinTS
         }
 
         /// <summary>
-        /// Sends a credit card order (HKKKU or HKKKS, which share the layout up to the card account):
+        /// Sends a credit card order (DKKKU, HKKKU or HKKKS, which share the layout up to the card account):
         /// Kontoverbindung + Kreditkartennummer (the account number from the UPD) + Unterkontomerkmal, then the
-        /// order's further data elements (for HKKKU Von Datum + Bis Datum + Maximale Anzahl Einträge
+        /// order's further data elements (for DKKKU/HKKKU Von Datum + Bis Datum + Maximale Anzahl Einträge
         /// + Aufsetzpunkt), followed by HKTAN when the BPD requires a TAN for the order.
         /// </summary>
         internal static async Task<String> SendCreditCardOrder(FinTsClient client, string job, int version, string account,

@@ -62,6 +62,7 @@ namespace libfintx.FinTS
         Task<HBCIDialogResult> TAN4(string TAN, string MediumName);
         Task<HBCIDialogResult<List<SwiftStatement>>> Transactions(TANDialog tanDialog, DateTime? startDate = null, DateTime? endDate = null, bool saveMt940File = false);
         Task<HBCIDialogResult<List<AccountTransaction>>> TransactionsSimple(TANDialog tanDialog, DateTime? startDate = null, DateTime? endDate = null);
+        Task<HBCIDialogResult<CreditCardStatement>> CreditCardTransactions(TANDialog tanDialog, DateTime? startDate = null, DateTime? endDate = null);
         Task<HBCIDialogResult<CreditCardStatement>> CreditCardTransactions_HKKKU(TANDialog tanDialog, DateTime? startDate = null, DateTime? endDate = null);
         Task<HBCIDialogResult<CreditCardAccountBalance>> CreditCardBalance(TANDialog tanDialog);
         Task<HBCIDialogResult<List<CamtStatement>>> Transactions_camt(TANDialog tanDialog, CamtVersion camtVers, DateTime? startDate = null, DateTime? endDate = null, bool saveCamtFile = false);

@@ -24,7 +24,7 @@ using System.Collections.Generic;
 namespace libfintx.FinTS
 {
     /// <summary>
-    /// Credit card transactions (HIKKU, "Kreditkartenumsätze rückmelden") and the card account balance
+    /// Credit card transactions (DIKKU or HIKKU, "Kreditkartenumsätze rückmelden") and the card account balance
     /// the bank reports with them
     /// </summary>
     public class CreditCardStatement
@@ -50,19 +50,19 @@ namespace libfintx.FinTS
         public DateTime? BalanceDate { get; set; }
 
         /// <summary>
-        /// Date of the last card statement (HIKKU "Datum der letzten Abrechnung"). Null if not
-        /// delivered or malformed.
+        /// Date of the last card statement (HIKKU "Datum der letzten Abrechnung"; DIKKU same position). Null if
+        /// not delivered or malformed.
         /// </summary>
         public DateTime? LastSettlementDate { get; set; }
 
         /// <summary>
-        /// Expected date of the next card statement (HIKKU "Voraussichtliches Abrechnungsdatum"). Null
-        /// if not delivered or malformed.
+        /// Expected date of the next card statement (HIKKU "Voraussichtliches Abrechnungsdatum"; DIKKU same
+        /// position). Null if not delivered or malformed.
         /// </summary>
         public DateTime? NextSettlementDate { get; set; }
 
         /// <summary>
-        /// The transactions of all HIKKU segments and pages, in the order the bank sent them
+        /// The transactions of all DIKKU or HIKKU segments and pages, in the order the bank sent them
         /// </summary>
         public List<CreditCardTransaction> Transactions { get; set; } = new List<CreditCardTransaction>();
     }

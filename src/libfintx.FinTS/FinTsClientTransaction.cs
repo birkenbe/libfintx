@@ -130,10 +130,50 @@ namespace libfintx.FinTS
         private const int CreditCardMaxPages = 100;
 
         /// <summary>
-        /// Credit card transactions (HKKKU version 1, FinTS 3.0 change G112, C.12.1); the card account balance
-        /// comes with the transactions. The start date is moved forward to the storage period (Speicherzeitraum)
-        /// of HIKKUS; no period is sent when HIKKUS does not allow one, the bank then returns the transactions
-        /// since the last card statement. Only HIKKUS version 1 is supported. A continuation without a new continuation point, or beyond 100 pages, ends with an error.
+        /// Credit card transactions (DKKKU). Institutes report credit card accounts in the UPD with this
+        /// order instead of HKKAZ/HKCAZ; the card account balance comes with the transactions. The start
+        /// date is moved forward to the number of days the institute serves (DIKKUS). Only DIKKUS version 2
+        /// is supported. A continuation without a new continuation point, or beyond 100 pages, ends with an error.
+        /// </summary>
+        /// <param name="tanDialog">The TAN Dialog</param>
+        /// <param name="startDate"></param>
+        /// <param name="endDate"></param>
+        /// <returns>
+        /// The transactions of all pages and the balance of the card account
+        /// </returns>
+        public async Task<HBCIDialogResult<CreditCardStatement>> CreditCardTransactions(TANDialog tanDialog, DateTime? startDate = null, DateTime? endDate = null)
+        {
+            var result = await InitializeConnection();
+            if (result.HasError)
+                return result.TypedResult<CreditCardStatement>();
+
+            result = await ProcessSCA(result, tanDialog, true);
+            if (result.HasError)
+                return result.TypedResult<CreditCardStatement>();
+
+            if (DIKKUS == 0)
+            {
+                var notSupported = new HBCIBankMessage("9000", "DKKKU is not supported by the bank (no DIKKUS in the BPD).");
+                return new HBCIDialogResult<CreditCardStatement>(new[] { notSupported }, null);
+            }
+
+            if (startDate != null && DIKKUS_MaxDays > 0 && startDate < DateTime.Today.AddDays(-DIKKUS_MaxDays))
+                startDate = DateTime.Today.AddDays(-DIKKUS_MaxDays);
+
+            string startDateStr = startDate?.ToString("yyyyMMdd");
+            string endDateStr = endDate?.ToString("yyyyMMdd");
+
+            return await CreditCardPages(tanDialog, "DKKKU",
+                startpoint => Transaction.DKKKU(this, startDateStr, endDateStr, startpoint),
+                Parse_CreditCardTransactions);
+        }
+
+        /// <summary>
+        /// Credit card transactions (HKKKU version 1, FinTS 3.0 change G112, C.12.1), the specified successor of
+        /// the institute-specific DKKKU; the card account balance comes with the transactions. The start date is
+        /// moved forward to the storage period (Speicherzeitraum) of HIKKUS; no period is sent when HIKKUS does
+        /// not allow one, the bank then returns the transactions since the last card statement. Only HIKKUS
+        /// version 1 is supported. A continuation without a new continuation point, or beyond 100 pages, ends with an error.
         /// </summary>
         /// <param name="tanDialog">The TAN Dialog</param>
         /// <param name="startDate">First booking date</param>

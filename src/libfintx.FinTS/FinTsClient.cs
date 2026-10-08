@@ -80,6 +80,8 @@ namespace libfintx.FinTS
         internal int HISPAS { get; set; }
         internal int HISPAS_Pain { get; set; }
         internal bool HISPAS_AccountNationalAllowed { get; set; }
+        internal int DIKKUS { get; set; }
+        internal int DIKKUS_MaxDays { get; set; }
         internal int HIKKUS { get; set; }
         internal int HIKKUS_MaxDays { get; set; }
         internal bool HIKKUS_PeriodAllowed { get; set; }

@@ -24,8 +24,10 @@ using System.Collections.Generic;
 namespace libfintx.FinTS
 {
     /// <summary>
-    /// One credit card transaction of a HIKKU segment ("Umsatz Kreditkartenkonto"), specified in FinTS 3.0
-    /// change G112, C.12.1.
+    /// One credit card transaction of a DIKKU or HIKKU segment. The DIKKU layout is not published; it was
+    /// reverse engineered by several FinTS clients from real bank responses, so the meaning of some of its
+    /// fields is inferred. HIKKU ("Umsatz Kreditkartenkonto") is specified in FinTS 3.0 change G112, C.12.1.
+    /// Fields marked HIKKU are only filled from HIKKU, fields marked DIKKU only from DIKKU.
     /// </summary>
     public class CreditCardTransaction
     {
@@ -61,7 +63,7 @@ namespace libfintx.FinTS
         public decimal? ExchangeRate { get; set; }
 
         /// <summary>
-        /// Value date (Wertstellungsdatum).
+        /// Value date (Wertstellungsdatum). HIKKU only.
         /// </summary>
         public DateTime? ValueDate { get; set; }
 
@@ -76,23 +78,23 @@ namespace libfintx.FinTS
         public string Currency { get; set; }
 
         /// <summary>
-        /// Text lines in their original positions, usually merchant and location first: the four
-        /// Grundtext/Zusatz pairs of the Transaktionsbeschreibung as eight lines
+        /// Text lines in their original positions, usually merchant and location first: up to nine (DIKKU), or
+        /// the four Grundtext/Zusatz pairs of the Transaktionsbeschreibung as eight lines (HIKKU)
         /// </summary>
         public List<string> Texts { get; set; } = new List<string>();
 
         /// <summary>
-        /// Country code (Länderkennzeichen) as sent: numeric per FinTS, alphabetic at some institutes.
+        /// Country code (Länderkennzeichen) as sent: numeric per FinTS, alphabetic at some institutes. HIKKU only.
         /// </summary>
         public string CountryCode { get; set; }
 
         /// <summary>
-        /// Merchant name (Händlername).
+        /// Merchant name (Händlername). HIKKU only.
         /// </summary>
         public string MerchantName { get; set; }
 
         /// <summary>
-        /// ID of the card payment terminal (Kartenzahlungsterminal-ID).
+        /// ID of the card payment terminal (Kartenzahlungsterminal-ID). HIKKU only.
         /// </summary>
         public string TerminalId { get; set; }
 
@@ -107,27 +109,37 @@ namespace libfintx.FinTS
         public string BookingReference { get; set; }
 
         /// <summary>
+        /// Merchant category code (MCC). Null for transactions without a merchant, e.g. the settlement debit. DIKKU only.
+        /// </summary>
+        public string MerchantCategoryCode { get; set; }
+
+        /// <summary>
         /// Date of the card statement the transaction was settled with, if already settled
         /// </summary>
         public DateTime? SettlementDate { get; set; }
 
         /// <summary>
-        /// Key of the fee charged for the transaction (Gebührenschlüssel).
+        /// Additional text after the settlement date, seen as the foreign currency fee. DIKKU only.
+        /// </summary>
+        public string AdditionalText { get; set; }
+
+        /// <summary>
+        /// Key of the fee charged for the transaction (Gebührenschlüssel). HIKKU only.
         /// </summary>
         public string FeeKey { get; set; }
 
         /// <summary>
-        /// Settlement period the transaction belongs to (Abrechnungskennzeichen), free text such as "09-2024".
+        /// Settlement period the transaction belongs to (Abrechnungskennzeichen), free text such as "09-2024". HIKKU only.
         /// </summary>
         public string SettlementPeriod { get; set; }
 
         /// <summary>
-        /// Cash or ATM fee with its booking reference, formatted for display (GAA-/BAR-Entgelt).
+        /// Cash or ATM fee with its booking reference, formatted for display (GAA-/BAR-Entgelt). HIKKU only.
         /// </summary>
         public string CashFee { get; set; }
 
         /// <summary>
-        /// Foreign usage fee with its booking reference, formatted for display (AEE, Auslandseinsatzentgelt).
+        /// Foreign usage fee with its booking reference, formatted for display (AEE, Auslandseinsatzentgelt). HIKKU only.
         /// </summary>
         public string ForeignFee { get; set; }
     }

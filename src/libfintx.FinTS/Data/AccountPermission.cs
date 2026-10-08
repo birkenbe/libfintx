@@ -72,6 +72,7 @@ namespace libfintx.FinTS
                 case "DKKAU": result = "Kreditkartenabrechnungsübersicht anfordern"; break;
                 case "DKKKA": result = "Kreditkartenabrechnungen anfordern"; break;
                 case "DKKKU": result = "Kreditkartenumsätze anfordern"; break;
+                case "DKKKS": result = "Kreditkartensaldo anfordern"; break;
                 case "DKZDF": result = "Zahlungsverkehrsdateien freigeben"; break;
                 case "DKZDL": result = "Zahlungsverkehrsdateien löschen"; break;
                 case "HIADRS": result = "Adressänderung Parameter"; break;

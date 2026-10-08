@@ -266,6 +266,15 @@ public partial class FinTsClient
                     }
                 }
 
+                // Only version 2 is known and implemented (DKKKU.cs); any other version counts as not supported.
+                if (segment.Name == "DIKKUS" && segment.Version == 2)
+                {
+                    // DIKKUS:48:2:4+1+1+0+90:N:J -> Anzahl Tage:Eingabe Anzahl Einträge erlaubt:Zeitraum möglich
+                    this.DIKKUS = segment.Version;
+                    var parameters = segment.DataElements.Count > 3 ? SplitDataElementGroup(segment.DataElements[3]) : new List<string>();
+                    this.DIKKUS_MaxDays = parameters.Count > 0 && int.TryParse(parameters[0], out int days) ? days : 0;
+                }
+
                 // Only version 1 (FinTS 3.0 change G112, C.12.1) is implemented (HKKKU.cs); any other version counts as not supported.
                 if (segment.Name == "HIKKUS" && segment.Version == 1)
                 {
@@ -401,8 +410,22 @@ public partial class FinTsClient
     }
 
     /// <summary>
+    /// Parse the credit card transactions (DIKKU) of all DIKKU segments of a message:
+    /// card number + (empty) + balance C|D:amount:currency:date + date + date + one transaction per data element.
+    /// The balance and the last/next settlement dates are taken from the first segment that carries them. A malformed amount throws a
+    /// <see cref="FormatException"/> naming the field, never its content.
+    /// </summary>
+    /// <param name="message"></param>
+    /// <returns></returns>
+    internal static CreditCardStatement Parse_CreditCardTransactions(string message)
+    {
+        // DIKKU:5:2:3+4999990000001234++C:0,:EUR:20260922+20260904++4999990000001234:20260827:20260831::27,99:EUR:D:1,:27,99:EUR:D:MERCHANT IE:::::::::J:20262430027631940001:3246:20260904'
+        return Parse_CreditCardStatement(message, "DIKKU", Parse_CreditCardTransaction);
+    }
+
+    /// <summary>
     /// Parse the credit card transactions (HIKKU v1, FinTS 3.0 change G112, C.12.1) of all HIKKU segments of a
-    /// message: Kreditkartennummer + Kreditkartenkontonummer/Kundennummer
+    /// message. The segment has the DIKKU layout: Kreditkartennummer + Kreditkartenkontonummer/Kundennummer
     /// + Aktueller Saldo (sdo) + Datum der letzten Abrechnung + Voraussichtliches Abrechnungsdatum + one
     /// "Umsatz Kreditkartenkonto" per data element. The card number may be masked differently than in the UPD.
     /// A transaction without any value (some institutes send one after the last) is skipped.
@@ -465,7 +488,7 @@ public partial class FinTsClient
     }
 
     /// <summary>
-    /// The statement of all <paramref name="segmentName"/> segments of a message, read in the HIKKU
+    /// The statement of all <paramref name="segmentName"/> segments of a message; DIKKU and HIKKU share the
     /// layout up to the transactions. <paramref name="parseTransaction"/> gets the components of one
     /// transaction and its name for error messages, and may return null to skip it.
     /// </summary>
@@ -511,6 +534,36 @@ public partial class FinTsClient
         }
 
         return statement;
+    }
+
+    /// <summary>
+    /// One DIKKU transaction, positional: card number : receipt date : booking date : (empty) : original amount
+    /// : original currency : C|D : exchange rate : amount : currency : C|D : text lines 1-9 : booked J/N
+    /// : booking reference : MCC : settlement date : (empty) : additional text. The number of trailing fields
+    /// differs per transaction, also within one segment.
+    /// </summary>
+    private static CreditCardTransaction Parse_CreditCardTransaction(List<string> fields, string name)
+    {
+        string Field(int index) => index < fields.Count && fields[index].Length > 0 ? fields[index] : null;
+        string Name(int index) => $"{name}, field {index + 1}";
+
+        return new CreditCardTransaction
+        {
+            CardNumber = Field(0),
+            ReceiptDate = ParseDate(Field(1)),
+            BookingDate = ParseDate(Field(2)),
+            OriginalAmount = Field(4) == null ? null : ParseSignedAmount(Field(6), Field(4), Name(4)),
+            OriginalCurrency = Field(5),
+            ExchangeRate = Field(7) == null ? null : ParseCreditCardAmount(Field(7), Name(7)),
+            Amount = ParseSignedAmount(Field(10), Field(8), Name(8)),
+            Currency = Field(9),
+            Texts = CreditCardTexts(fields, 11, 9),
+            Settled = Field(20) == null ? null : Field(20) == "J",
+            BookingReference = Field(21),
+            MerchantCategoryCode = Field(22),
+            SettlementDate = ParseDate(Field(23)),
+            AdditionalText = Field(25),
+        };
     }
 
     /// <summary>
