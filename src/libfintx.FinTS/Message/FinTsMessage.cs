@@ -708,11 +708,11 @@ namespace libfintx.FinTS.Message
             {
                 if (HIRMS_TAN == null)
                 {
-                    client.Logger.LogInformation(MaskSecret(MaskSecret(payload, UserID), PIN));
+                    client.Logger.LogDebug(MaskSecret(MaskSecret(payload, UserID), PIN));
                 }
                 else if (!string.IsNullOrEmpty(TAN_))
                 {
-                    client.Logger.LogInformation(MaskSecret(MaskSecret(MaskSecret(payload, UserID), PIN), TAN_));
+                    client.Logger.LogDebug(MaskSecret(MaskSecret(MaskSecret(payload, UserID), PIN), TAN_));
                 }
             }
 

@@ -32,6 +32,7 @@ using libfintx.FinTS.Camt.Camt052;
 using libfintx.FinTS.Camt.Camt053;
 using libfintx.Globals;
 using libfintx.Swift;
+using Microsoft.Extensions.Logging;
 
 namespace libfintx.FinTS
 {
@@ -121,6 +122,148 @@ namespace libfintx.FinTS
             }
 
             return result.TypedResult(swiftStatements);
+        }
+
+        /// <summary>
+        /// Upper bound of credit card transaction pages (3040 continuations) per request, against a bank that never stops.
+        /// </summary>
+        private const int CreditCardMaxPages = 100;
+
+        /// <summary>
+        /// Credit card transactions (HKKKU version 1, FinTS 3.0 change G112, C.12.1); the card account balance
+        /// comes with the transactions. The start date is moved forward to the storage period (Speicherzeitraum)
+        /// of HIKKUS; no period is sent when HIKKUS does not allow one, the bank then returns the transactions
+        /// since the last card statement. Only HIKKUS version 1 is supported. A continuation without a new continuation point, or beyond 100 pages, ends with an error.
+        /// </summary>
+        /// <param name="tanDialog">The TAN Dialog</param>
+        /// <param name="startDate">First booking date</param>
+        /// <param name="endDate">Last booking date</param>
+        /// <returns>
+        /// The transactions of all pages and the balance of the card account
+        /// </returns>
+        public async Task<HBCIDialogResult<CreditCardStatement>> CreditCardTransactions_HKKKU(TANDialog tanDialog, DateTime? startDate = null, DateTime? endDate = null)
+        {
+            var result = await InitializeConnection();
+            if (result.HasError)
+                return result.TypedResult<CreditCardStatement>();
+
+            result = await ProcessSCA(result, tanDialog, true);
+            if (result.HasError)
+                return result.TypedResult<CreditCardStatement>();
+
+            if (HIKKUS == 0)
+            {
+                var notSupported = new HBCIBankMessage("9000", "HKKKU is not supported by the bank (no HIKKUS version 1 in the BPD).");
+                return new HBCIDialogResult<CreditCardStatement>(new[] { notSupported }, null);
+            }
+
+            if (!HIKKUS_PeriodAllowed)
+            {
+                Logger.LogInformation("HKKKU: the bank allows no period (HIKKUS), only the transactions since the last card statement are available");
+                startDate = null;
+                endDate = null;
+            }
+
+            if (startDate != null && HIKKUS_MaxDays > 0 && startDate < DateTime.Today.AddDays(-HIKKUS_MaxDays))
+                startDate = DateTime.Today.AddDays(-HIKKUS_MaxDays);
+
+            string startDateStr = startDate?.ToString("yyyyMMdd");
+            string endDateStr = endDate?.ToString("yyyyMMdd");
+
+            return await CreditCardPages(tanDialog, "HKKKU",
+                startpoint => Transaction.HKKKU(this, startDateStr, endDateStr, startpoint),
+                Parse_CreditCardTransactions_HIKKU);
+        }
+
+        /// <summary>
+        /// Credit card balance (HKKKS version 1, FinTS 3.0 change G112, C.12.2): the current balance of the card
+        /// account and, depending on the institute, the available amount, the open authorizations and the credit
+        /// limit. Only HIKKSS version 1 is supported. Opens a dialog of its own, like every job. Data is null when
+        /// the bank answers without HIKKS (3010 "Zur Kreditkarte liegen keine Salden vor").
+        /// </summary>
+        /// <param name="tanDialog">The TAN Dialog</param>
+        /// <returns>The balance of the card account</returns>
+        public async Task<HBCIDialogResult<CreditCardAccountBalance>> CreditCardBalance(TANDialog tanDialog)
+        {
+            var result = await InitializeConnection();
+            if (result.HasError)
+                return result.TypedResult<CreditCardAccountBalance>();
+
+            result = await ProcessSCA(result, tanDialog, true);
+            if (result.HasError)
+                return result.TypedResult<CreditCardAccountBalance>();
+
+            if (HIKKSS == 0)
+            {
+                var notSupported = new HBCIBankMessage("9000", "HKKKS is not supported by the bank (no HIKKSS version 1 in the BPD).");
+                return new HBCIDialogResult<CreditCardAccountBalance>(new[] { notSupported }, null);
+            }
+
+            string BankCode = await Transaction.HKKKS(this);
+            result = new HBCIDialogResult(Parse_BankCode(BankCode), BankCode);
+            if (result.HasError)
+                return result.TypedResult<CreditCardAccountBalance>();
+
+            result = await ProcessSCA(result, tanDialog);
+            if (result.HasError)
+                return result.TypedResult<CreditCardAccountBalance>();
+
+            return result.TypedResult(Parse_CreditCardBalance(result.RawData));
+        }
+
+        /// <summary>
+        /// Sends a credit card transactions order and follows its 3040 continuations: <paramref name="send"/> sends
+        /// the order with the given continuation point (null for the first page), <paramref name="parse"/> reads the
+        /// statement of one answer. The answer is taken after the SCA, so with a decoupled approval the data comes
+        /// from the final status answer.
+        /// </summary>
+        private async Task<HBCIDialogResult<CreditCardStatement>> CreditCardPages(TANDialog tanDialog, string job,
+            Func<string, Task<string>> send, Func<string, CreditCardStatement> parse)
+        {
+            string BankCode = await send(null);
+            var result = new HBCIDialogResult(Parse_BankCode(BankCode), BankCode);
+            if (result.HasError)
+                return result.TypedResult<CreditCardStatement>();
+
+            result = await ProcessSCA(result, tanDialog);
+            if (result.HasError)
+                return result.TypedResult<CreditCardStatement>();
+
+            BankCode = result.RawData;
+            var statement = parse(BankCode);
+            int pages = 1;
+            string previousStartpoint = null;
+
+            string BankCode_ = BankCode;
+            while (BankCode_.Contains("+3040::"))
+            {
+                Parse_Message(BankCode_);
+
+                string Startpoint = Parse_CreditCardTransactions_Startpoint(BankCode_);
+                if (string.IsNullOrEmpty(Startpoint) || Startpoint == previousStartpoint || pages >= CreditCardMaxPages)
+                {
+                    var stuck = new HBCIBankMessage("9000", $"{job} continuation stopped after {pages} page(s): the bank sent no new continuation point or more than {CreditCardMaxPages} pages.");
+                    return new HBCIDialogResult<CreditCardStatement>(new[] { stuck }, BankCode_);
+                }
+                previousStartpoint = Startpoint;
+
+                BankCode_ = await send(Startpoint);
+                result = new HBCIDialogResult(Parse_BankCode(BankCode_), BankCode_);
+                if (result.HasError)
+                    return result.TypedResult<CreditCardStatement>();
+
+                result = await ProcessSCA(result, tanDialog);
+                if (result.HasError)
+                    return result.TypedResult<CreditCardStatement>();
+
+                BankCode_ = result.RawData;
+                statement.Transactions.AddRange(parse(BankCode_).Transactions);
+                pages++;
+            }
+
+            Logger.LogInformation("Credit card transactions received: {Count} in {Pages} page(s)", statement.Transactions.Count, pages);
+
+            return result.TypedResult(statement);
         }
 
         /// <summary>

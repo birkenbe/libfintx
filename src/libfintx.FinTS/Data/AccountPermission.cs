@@ -471,6 +471,8 @@ namespace libfintx.FinTS
                 case "HKKDM": result = "Kundenmeldung"; break;
                 case "HKKIA": result = "Kreditinstitutsangebote anfordern"; break;
                 case "HKKIF": result = "Kontoinformationen anfordern"; break;
+                case "HKKKS": result = "Kreditkartensaldo anfordern"; break;
+                case "HKKKU": result = "Kreditkartenumsätze anfordern"; break;
                 case "HKKOM": result = "Kommunikationszugang anfordern"; break;
                 case "HKLAS": result = "Einzellastschrift"; break;
                 case "HKLGA": result = "Laden GeldKarte abmelden"; break;

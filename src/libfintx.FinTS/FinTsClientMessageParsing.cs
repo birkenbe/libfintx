@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using libfintx.FinTS.Camt;
@@ -15,6 +16,13 @@ public partial class FinTsClient
     /// </summary>
     private const string PatternResultMessage = @"(\d{4}):.*?:(.+)";
 
+    /// <summary>
+    /// FinTS amounts always use a decimal comma and no thousands separator, independent of the current culture.
+    /// </summary>
+    private static readonly NumberFormatInfo AmountFormat = NumberFormatInfo.ReadOnly(new NumberFormatInfo { NumberDecimalSeparator = ",", NumberGroupSeparator = "" });
+
+    private const NumberStyles AmountStyles = NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite | NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint;
+
     private Segment Parse_Segment(string segmentCode)
     {
         Segment segment = null;
@@ -24,7 +32,9 @@ public partial class FinTsClient
         }
         catch (Exception ex)
         {
-            Logger.LogInformation($"Couldn't parse segment: {ex.Message}{Environment.NewLine}{segmentCode}");
+            // The segment itself may carry personal data (e.g. camt bookings, card numbers): Debug only.
+            Logger.LogInformation($"Couldn't parse segment: {ex.Message}");
+            Logger.LogDebug(segmentCode);
         }
         return segment;
     }
@@ -255,6 +265,32 @@ public partial class FinTsClient
                         this.HISPAS_AccountNationalAllowed = hispas.IsAccountNationalAllowed;
                     }
                 }
+
+                // Only version 1 (FinTS 3.0 change G112, C.12.1) is implemented (HKKKU.cs); any other version counts as not supported.
+                if (segment.Name == "HIKKUS" && segment.Version == 1)
+                {
+                    // HIKKUS:25:1:4+990+0+0+370:N:J:J -> Speicherzeitraum:Eingabe Anzahl Einträge erlaubt:Angabe Zeitraum erlaubt:Kontoverbindung benötigt
+                    this.HIKKUS = segment.Version;
+                    var parameters = segment.DataElements.Count > 3 ? SplitDataElementGroup(segment.DataElements[3]) : new List<string>();
+                    this.HIKKUS_MaxDays = parameters.Count > 0 && int.TryParse(parameters[0], out int days) ? days : 0;
+                    this.HIKKUS_PeriodAllowed = parameters.Count > 2 && parameters[2] == "J";
+                    this.HIKKUS_AccountRequired = parameters.Count > 3 && parameters[3] == "J";
+                }
+
+                // Only version 1 (FinTS 3.0 change G112, C.12.2) is implemented (HKKKS.cs); any other version counts as not supported.
+                if (segment.Name == "HIKKSS" && segment.Version == 1)
+                {
+                    // HIKKSS:24:1:4+990+1+0+J -> Kontoverbindung benötigt
+                    this.HIKKSS = segment.Version;
+                    var parameters = segment.DataElements.Count > 3 ? SplitDataElementGroup(segment.DataElements[3]) : new List<string>();
+                    this.HIKKSS_AccountRequired = parameters.Count > 0 && parameters[0] == "J";
+                }
+
+                if (segment.Name == "HIUPA")
+                {
+                    // HIUPA:4:4:4+Benutzerkennung+UPD-Version+UPD-Verwendung+Benutzername
+                    this.UPDUsage = segment.DataElements.Count > 2 && int.TryParse(segment.DataElements[2], out int usage) ? usage : null;
+                }
             }
 
             // Fallback if HIKAZS is not delivered by BPD (eg. Postbank)
@@ -338,6 +374,221 @@ public partial class FinTsClient
         }
 
         return segments;
+    }
+
+    /// <summary>
+    /// Split a data element group at unescaped ':' and remove the FinTS escaping ('?x' becomes 'x').
+    /// </summary>
+    private static List<string> SplitDataElementGroup(string dataElement)
+    {
+        var elements = new List<string>();
+        var current = new System.Text.StringBuilder();
+        for (int i = 0; i < dataElement.Length; i++)
+        {
+            var c = dataElement[i];
+            if (c == '?' && i + 1 < dataElement.Length)
+                current.Append(dataElement[++i]);
+            else if (c == ':')
+            {
+                elements.Add(current.ToString());
+                current.Clear();
+            }
+            else
+                current.Append(c);
+        }
+        elements.Add(current.ToString());
+        return elements;
+    }
+
+    /// <summary>
+    /// Parse the credit card transactions (HIKKU v1, FinTS 3.0 change G112, C.12.1) of all HIKKU segments of a
+    /// message: Kreditkartennummer + Kreditkartenkontonummer/Kundennummer
+    /// + Aktueller Saldo (sdo) + Datum der letzten Abrechnung + Voraussichtliches Abrechnungsdatum + one
+    /// "Umsatz Kreditkartenkonto" per data element. The card number may be masked differently than in the UPD.
+    /// A transaction without any value (some institutes send one after the last) is skipped.
+    /// </summary>
+    /// <param name="message">The bank's answer</param>
+    /// <returns>The transactions of all HIKKU segments and the first balance</returns>
+    internal static CreditCardStatement Parse_CreditCardTransactions_HIKKU(string message)
+    {
+        // HIKKU:4:1:3+4999990000001234+KD-1+D:10,:EUR:20260922+20260104+20260204+4999990000001234:20260827:20260831::::::::27,99:EUR:D:REWE MARKT::::::::276:REWE Markt GmbH::N:REF1::::'
+        return Parse_CreditCardStatement(message, "HIKKU", Parse_HikkuTransaction);
+    }
+
+    /// <summary>
+    /// Parse the credit card balance (HIKKS v1, FinTS 3.0 change G112, C.12.2) of the first HIKKS segment of a
+    /// message: Kreditkartennummer + Kreditkartenkontonummer/Kundennummer (O) + Aktueller Saldo (sdo)
+    /// + Verfügbarer Betrag (btgv, O) + Summe offener Autorisierungen (btg, O) + Verfügungsrahmen (btg, O)
+    /// + Voraussichtliches Abrechnungsdatum (O). A malformed amount throws a <see cref="FormatException"/>
+    /// naming the field, never its content.
+    /// </summary>
+    /// <param name="message">The bank's answer</param>
+    /// <returns>The balance, or null when the answer carries no HIKKS (e.g. 3010 "Zur Kreditkarte liegen keine Salden vor")</returns>
+    internal static CreditCardAccountBalance Parse_CreditCardBalance(string message)
+    {
+        // HIKKS:4:1:3+4999990000001234+KD-1+D:1234,56:EUR:20261006+5000,:EUR:C+120,5:EUR+6000,:EUR+20261020'
+        var segment = Helper.SplitEncryptedSegments(message).FirstOrDefault(s => s.StartsWith("HIKKS:"));
+        var payloadStart = segment?.IndexOf('+') ?? -1;
+        if (payloadStart < 0)
+            return null;
+
+        var dataElements = Helper.SplitDataElements(segment.Substring(payloadStart + 1));
+        string Element(int index) => index < dataElements.Count && dataElements[index].Length > 0 ? dataElements[index] : null;
+        List<string> Group(int index) => Element(index) == null ? null : SplitDataElementGroup(Element(index));
+
+        var result = new CreditCardAccountBalance
+        {
+            CardNumber = Group(0)?[0],
+            CardAccountNumber = Group(1)?[0],
+            ExpectedSettlementDate = ParseDate(Element(6)),
+        };
+
+        // sdo: C|D : Wert : Währung : Datum [: Uhrzeit]
+        if (Group(2) is { } balance)
+        {
+            result.Balance = ParseSignedAmount(balance[0], balance.Count > 1 ? balance[1] : null, "HIKKS balance");
+            result.BalanceCurrency = balance.Count > 2 ? balance[2] : null;
+            result.BalanceDate = balance.Count > 3 ? ParseDate(balance[3]) : null;
+        }
+
+        // btgv: Wert : Währung : C|D
+        if (Group(3) is { } available)
+            result.AvailableAmount = ParseSignedAmount(available.Count > 2 ? available[2] : null, available[0], "HIKKS available amount");
+
+        // btg: Wert : Währung
+        if (Group(4) is { } authorizations)
+            result.OpenAuthorizations = ParseCreditCardAmount(authorizations[0], "HIKKS open authorizations");
+        if (Group(5) is { } limit)
+            result.CreditLimit = ParseCreditCardAmount(limit[0], "HIKKS credit limit");
+
+        return result;
+    }
+
+    /// <summary>
+    /// The statement of all <paramref name="segmentName"/> segments of a message, read in the HIKKU
+    /// layout up to the transactions. <paramref name="parseTransaction"/> gets the components of one
+    /// transaction and its name for error messages, and may return null to skip it.
+    /// </summary>
+    private static CreditCardStatement Parse_CreditCardStatement(string message, string segmentName,
+        Func<List<string>, string, CreditCardTransaction> parseTransaction)
+    {
+        var statement = new CreditCardStatement();
+        foreach (var segment in Helper.SplitEncryptedSegments(message))
+        {
+            if (!segment.StartsWith(segmentName + ":"))
+                continue;
+
+            var payloadStart = segment.IndexOf('+');
+            if (payloadStart < 0)
+                continue;
+
+            var dataElements = Helper.SplitDataElements(segment.Substring(payloadStart + 1));
+            statement.CardNumber ??= SplitDataElementGroup(dataElements[0])[0];
+
+            if (statement.Balance == null && dataElements.Count > 2 && dataElements[2].Length > 0)
+            {
+                var balance = SplitDataElementGroup(dataElements[2]);
+                statement.Balance = ParseSignedAmount(balance[0], balance.Count > 1 ? balance[1] : null, $"{segmentName} balance");
+                statement.BalanceCurrency = balance.Count > 2 ? balance[2] : null;
+                statement.BalanceDate = balance.Count > 3 ? ParseDate(balance[3]) : null;
+            }
+
+            // Informational only: a missing or malformed date stays null.
+            if (statement.LastSettlementDate == null && dataElements.Count > 3)
+                statement.LastSettlementDate = ParseDate(dataElements[3]);
+            if (statement.NextSettlementDate == null && dataElements.Count > 4)
+                statement.NextSettlementDate = ParseDate(dataElements[4]);
+
+            for (int i = 5; i < dataElements.Count; i++)
+            {
+                if (dataElements[i].Length == 0)
+                    continue;
+
+                var transaction = parseTransaction(SplitDataElementGroup(dataElements[i]), $"{segmentName} transaction {i - 4}");
+                if (transaction != null)
+                    statement.Transactions.Add(transaction);
+            }
+        }
+
+        return statement;
+    }
+
+    /// <summary>
+    /// One HIKKU "Umsatz Kreditkartenkonto", positional with its nested groups flattened:
+    /// 0 Umsatz getätigt von : 1 Belegdatum : 2 Buchungsdatum : 3 Abrechnungsdatum : 4 Wertstellungsdatum
+    /// : 5-7 Originalbetrag (Wert:Währung:C|D) : 8 Umrechnungskurs : 9-11 Buchungsbetrag (Wert:Währung:C|D)
+    /// : 12-19 Transaktionsbeschreibung 4 x (Grundtext:Zusatz) : 20 Länderkennzeichen : 21 Händlername
+    /// : 22 Kartenzahlungsterminal-ID : 23 Umsatz abgerechnet J/N : 24 Buchungsreferenz : 25 Gebührenschlüssel
+    /// : 26 Abrechnungskennzeichen : 27 GAA-/BAR-Entgelt + Buchungsreferenz : 28 AEE + Buchungsreferenz.
+    /// Further components are ignored. Returns null for a transaction without any value.
+    /// </summary>
+    private static CreditCardTransaction Parse_HikkuTransaction(List<string> fields, string name)
+    {
+        if (fields.All(f => f.Length == 0))
+            return null;
+
+        string Field(int index) => index < fields.Count && fields[index].Length > 0 ? fields[index] : null;
+        string Name(int index) => $"{name}, field {index + 1}";
+
+        return new CreditCardTransaction
+        {
+            CardNumber = Field(0),
+            ReceiptDate = ParseDate(Field(1)),
+            BookingDate = ParseDate(Field(2)),
+            SettlementDate = ParseDate(Field(3)),
+            ValueDate = ParseDate(Field(4)),
+            OriginalAmount = Field(5) == null ? null : ParseSignedAmount(Field(7), Field(5), Name(5)),
+            OriginalCurrency = Field(6),
+            ExchangeRate = Field(8) == null ? null : ParseCreditCardAmount(Field(8), Name(8)),
+            Amount = ParseSignedAmount(Field(11), Field(9), Name(9)),
+            Currency = Field(10),
+            Texts = CreditCardTexts(fields, 12, 8),
+            CountryCode = Field(20),
+            MerchantName = Field(21),
+            TerminalId = Field(22),
+            Settled = Field(23) == null ? null : Field(23) == "J",
+            BookingReference = Field(24),
+            FeeKey = Field(25),
+            SettlementPeriod = Field(26),
+            CashFee = Field(27),
+            // G112 contradicts itself here: the transaction table has DE an..40, the glossary DEG sdo; the table is followed.
+            ForeignFee = Field(28),
+        };
+    }
+
+    /// <summary>
+    /// The text fields in their original positions, without the trailing empty ones.
+    /// </summary>
+    private static List<string> CreditCardTexts(List<string> fields, int start, int count)
+    {
+        var texts = fields.Skip(start).Take(count).ToList();
+        while (texts.Count > 0 && texts[texts.Count - 1].Length == 0)
+            texts.RemoveAt(texts.Count - 1);
+        return texts;
+    }
+
+    /// <summary>
+    /// An unsigned FinTS amount (decimal comma, e.g. "75,") with its separate credit/debit mark; D is negative.
+    /// </summary>
+    private static decimal ParseSignedAmount(string creditDebit, string amount, string field)
+    {
+        var value = ParseCreditCardAmount(amount, field);
+        return creditDebit == "D" ? -Math.Abs(value) : value;
+    }
+
+    private static decimal ParseCreditCardAmount(string value, string field)
+    {
+        if (string.IsNullOrEmpty(value) || !decimal.TryParse(value, AmountStyles, AmountFormat, out var amount))
+            throw new FormatException($"{field}: missing or not a FinTS amount.");
+
+        return amount;
+    }
+
+    private static DateTime? ParseDate(string value)
+    {
+        return DateTime.TryParseExact(value, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? date
+            : null;
     }
 
     internal AccountBalance Parse_Balance(string message)
@@ -431,6 +682,16 @@ public partial class FinTsClient
     internal static string Parse_Transactions_Startpoint(string bankCode)
     {
         return Regex.Match(bankCode, @"\+3040::[^:]+:(?<startpoint>[^'\+:]+)['\+:]").Groups["startpoint"].Value;
+    }
+
+    /// <summary>
+    /// The continuation point of a 3040 message, kept FinTS-escaped as it is sent back. Unlike
+    /// <see cref="Parse_Transactions_Startpoint"/> the message text cannot run into the next segment,
+    /// so a 3040 without continuation point yields an empty string.
+    /// </summary>
+    internal static string Parse_CreditCardTransactions_Startpoint(string bankCode)
+    {
+        return Regex.Match(bankCode, @"\+3040::(?:[^:'+?]|\?.)*:(?<startpoint>(?:[^:'+?]|\?.)+)").Groups["startpoint"].Value;
     }
 
     /// <summary>

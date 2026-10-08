@@ -80,6 +80,18 @@ namespace libfintx.FinTS
         internal int HISPAS { get; set; }
         internal int HISPAS_Pain { get; set; }
         internal bool HISPAS_AccountNationalAllowed { get; set; }
+        internal int HIKKUS { get; set; }
+        internal int HIKKUS_MaxDays { get; set; }
+        internal bool HIKKUS_PeriodAllowed { get; set; }
+        internal bool HIKKUS_AccountRequired { get; set; }
+        internal int HIKKSS { get; set; }
+        internal bool HIKKSS_AccountRequired { get; set; }
+
+        /// <summary>
+        /// UPD-Verwendung of the last HIUPA: 0 = orders not listed in the UPD are blocked, 1 = no statement
+        /// about orders not listed in the UPD (they may be allowed). Null until a HIUPA was received.
+        /// </summary>
+        public int? UPDUsage { get; internal set; }
 
         /// <summary>
         /// Initializes a new FinTS client.

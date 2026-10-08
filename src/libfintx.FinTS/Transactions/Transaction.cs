@@ -42,6 +42,8 @@ using static libfintx.FinTS.HKDME;
 using static libfintx.FinTS.HKDSE;
 using static libfintx.FinTS.HKEND;
 using static libfintx.FinTS.HKKAZ;
+using static libfintx.FinTS.HKKKS;
+using static libfintx.FinTS.HKKKU;
 using static libfintx.FinTS.HKPPD;
 using static libfintx.FinTS.HKSAL;
 using static libfintx.FinTS.HKSYN;
@@ -73,6 +75,16 @@ namespace libfintx.FinTS
         public static async Task<String> HKSAL(FinTsClient client)
         {
             return await Init_HKSAL(client);
+        }
+
+        public static async Task<String> HKKKU(FinTsClient client, string FromDate, string ToDate, string Startpoint)
+        {
+            return await Init_HKKKU(client, FromDate, ToDate, Startpoint);
+        }
+
+        public static async Task<String> HKKKS(FinTsClient client)
+        {
+            return await Init_HKKKS(client);
         }
 
         public static async Task<String> HKKAZ(FinTsClient client, string FromDate, string ToDate, string Startpoint)
